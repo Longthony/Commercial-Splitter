@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -27,6 +27,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt "pyinstaller>=6.10,<7"
+
+      - name: Download FFmpeg tools
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path tools | Out-Null
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp"
+          $bin = Get-ChildItem "ffmpeg-temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          if (-not $bin) { throw "FFmpeg executable not found" }
+          foreach ($name in @("ffmpeg.exe", "ffprobe.exe", "ffplay.exe")) {
+            $source = Join-Path $bin.DirectoryName $name
+            if (!(Test-Path $source)) { throw "$name not found" }
+            Copy-Item $source "tools/$name"
+          }
 
       - name: Build Windows executable
         shell: pwsh
