@@ -14,7 +14,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -71,7 +71,7 @@ jobs:
           Get-FileHash 'dist/Commercial Splitter.exe' -Algorithm SHA256
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Commercial-Splitter-Windows
           path: dist/Commercial Splitter.exe
