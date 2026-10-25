@@ -2077,7 +2077,7 @@ class Main(QMainWindow):
   remote=tuple(map(int,version.split('.')))
   if remote<=current:
    self.status.setText('Commercial Splitter is up to date')
-   QMessageBox.information(self,'Check for Updates',f'You are running 4.9.1. Latest {data['channel']} release: {version}.')
+   QMessageBox.information(self,'Check for Updates',f"You are running 4.9.1. Latest {data['channel']} release: {version}.")
    return
   self.status.setText('Commercial Splitter '+version+' is available')
   message=f'Commercial Splitter {version} is available ({"pre-release" if data["prerelease"] else "stable"}).\n\n'+data['notes'][:900]+'\n\nOpen its official GitHub release page?\n\nUpdates are not installed automatically in this version.'
