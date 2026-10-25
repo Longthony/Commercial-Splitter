@@ -1,4 +1,4 @@
-"""Commercial Splitter 4.9.0 — Recovery checkpoints and interrupted-session detection."""
+"""Commercial Splitter 4.9.1 — Recovery checkpoints and interrupted-session detection."""
 import math, hashlib, json, os, subprocess, sys, re, csv, tempfile, time, traceback, threading, shutil, bisect, urllib.request, urllib.error
 from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QThread, Signal, QTimer, QProcess, QUrl, QEvent, QMimeData, QPoint
@@ -72,22 +72,30 @@ class OrganizerCard(QPushButton):
   event.acceptProposedAction()
 
 class ReleaseCheckWorker(QThread):
- """Fetch only public release metadata. No files are downloaded or installed."""
+ """Fetch public GitHub release metadata only."""
  result=Signal(object)
+ def __init__(self,channel='stable',parent=None):
+  super().__init__(parent);self.channel=channel
  def run(self):
   try:
-   req=urllib.request.Request('https://api.github.com/repos/Longthony/Commercial-Splitter/releases/latest',headers={'Accept':'application/vnd.github+json','User-Agent':'CommercialSplitter/4.9.0'})
+   endpoint='releases/latest' if self.channel=='stable' else 'releases?per_page=30'
+   req=urllib.request.Request('https://api.github.com/repos/Longthony/Commercial-Splitter/'+endpoint,headers={'Accept':'application/vnd.github+json','User-Agent':'CommercialSplitter/4.9.1'})
    with urllib.request.urlopen(req,timeout=12) as response:
     if response.status!=200:raise RuntimeError('GitHub returned HTTP '+str(response.status))
     data=json.load(response)
-   tag=str(data.get('tag_name','')).lstrip('vV')
-   if not re.fullmatch(r'\d+\.\d+\.\d+',tag):raise ValueError('Invalid release version from GitHub')
-   url=str(data.get('html_url',''))
-   if not url.startswith('https://github.com/Longthony/Commercial-Splitter/releases/'):
-    raise ValueError('Unexpected release URL')
-   self.result.emit({'version':tag,'url':url,'notes':str(data.get('body') or '')[:1200]})
+   candidates=[]
+   for release in (data if isinstance(data,list) else [data]):
+    if not isinstance(release,dict) or release.get('draft') or (self.channel=='stable' and release.get('prerelease')):continue
+    tag=str(release.get('tag_name','')).lstrip('vV')
+    if not re.fullmatch(r'\d+\.\d+\.\d+',tag):continue
+    url=str(release.get('html_url',''))
+    if not url.startswith('https://github.com/Longthony/Commercial-Splitter/releases/'):continue
+    candidates.append((tuple(map(int,tag.split('.'))),tag,url,str(release.get('body') or ''),bool(release.get('prerelease'))))
+   if not candidates:raise ValueError('No '+self.channel+' releases found on GitHub.')
+   _,tag,url,notes,prerelease=max(candidates,key=lambda item:item[0])
+   self.result.emit({'version':tag,'url':url,'notes':notes[:2000],'prerelease':prerelease,'channel':self.channel})
   except urllib.error.HTTPError as exc:
-   self.result.emit({'error':'No published release found yet.' if exc.code==404 else 'GitHub returned HTTP '+str(exc.code)})
+   self.result.emit({'error':'No '+self.channel+' release found yet.' if exc.code==404 else 'GitHub returned HTTP '+str(exc.code)})
   except Exception as exc:self.result.emit({'error':str(exc)})
 
 class Worker(QThread):
@@ -2045,10 +2053,18 @@ class Main(QMainWindow):
   review=self.menuBar().addMenu('Review');review.addAction('Refresh Saved Cuts',self.read_recovery);review.addAction('Scan Recording',self.scan_native);review.addAction('Start Fresh / Clear Recovery',self.clear_video_recovery);
   export=self.menuBar().addMenu('Export');export.addAction('Export Selected Clips',self.export_native);export.addAction('Add Clips to Queue',self.add_export_queue);export.addAction('Run Queue',self.run_export_queue);export.addAction('Export History',self.show_export_history)
   settings=self.menuBar().addMenu('Settings');settings.addAction('Preferences…',self.show_settings)
-  helpmenu=self.menuBar().addMenu('Help');helpmenu.addAction('Check for Updates…',self.check_for_updates);helpmenu.addAction('Save Diagnostics Report…',self.save_diagnostics_report);helpmenu.addAction('About…',lambda:QMessageBox.information(self,'About Commercial Splitter','Commercial Splitter v4.9.0\n\nTimeline editing, detection review, project management, and verified clip exports.'))
+  helpmenu=self.menuBar().addMenu('Help');helpmenu.addAction('Check for Updates…',self.check_for_updates);channel_menu=helpmenu.addMenu('Update Channel');self.stable_channel_action=channel_menu.addAction('Stable releases');self.prerelease_channel_action=channel_menu.addAction('Include pre-releases');self.stable_channel_action.setCheckable(True);self.prerelease_channel_action.setCheckable(True);self.stable_channel_action.triggered.connect(lambda:self.set_update_channel('stable'));self.prerelease_channel_action.triggered.connect(lambda:self.set_update_channel('prerelease'));self.refresh_update_channel_menu();helpmenu.addAction('Save Diagnostics Report…',self.save_diagnostics_report);helpmenu.addAction('About…',lambda:QMessageBox.information(self,'About Commercial Splitter','Commercial Splitter v4.9.1\n\nTimeline editing, detection review, project management, and verified clip exports.'))
+ def refresh_update_channel_menu(self):
+  channel=self.prefs.get('update_channel','stable')
+  self.stable_channel_action.setChecked(channel=='stable')
+  self.prerelease_channel_action.setChecked(channel=='prerelease')
+ def set_update_channel(self,channel):
+  self.prefs['update_channel']=channel
+  self.save_preferences(self.prefs)
+  self.refresh_update_channel_menu()
  def check_for_updates(self):
   if getattr(self,'release_checker',None) is not None and self.release_checker.isRunning():return
-  self.release_checker=ReleaseCheckWorker(self)
+  self.release_checker=ReleaseCheckWorker(self.prefs.get('update_channel','stable'),self)
   self.release_checker.result.connect(self.show_release_result)
   self.release_checker.start()
   self.status.setText('Checking GitHub for updates…')
@@ -2057,14 +2073,14 @@ class Main(QMainWindow):
    self.status.setText('Update check unavailable')
    QMessageBox.information(self,'Check for Updates',data['error']);return
   version=data['version']
-  current=(4,9,0)
+  current=(4,9,1)
   remote=tuple(map(int,version.split('.')))
   if remote<=current:
    self.status.setText('Commercial Splitter is up to date')
-   QMessageBox.information(self,'Check for Updates',f'You are running 4.9.0. Latest published release: {version}.')
+   QMessageBox.information(self,'Check for Updates',f'You are running 4.9.1. Latest {data['channel']} release: {version}.')
    return
   self.status.setText('Commercial Splitter '+version+' is available')
-  message=f'Commercial Splitter {version} is available.\n\n'+data['notes'][:600]+'\n\nOpen its official GitHub release page?\n\nUpdates are not installed automatically in this version.'
+  message=f'Commercial Splitter {version} is available ({"pre-release" if data["prerelease"] else "stable"}).\n\n'+data['notes'][:900]+'\n\nOpen its official GitHub release page?\n\nUpdates are not installed automatically in this version.'
   if QMessageBox.question(self,'Update Available',message,QMessageBox.Yes|QMessageBox.No)==QMessageBox.Yes:
    QDesktopServices.openUrl(QUrl(data['url']))
  def save_diagnostics_report(self):
@@ -2136,12 +2152,13 @@ class Main(QMainWindow):
    layout.insertWidget(2,self.timeline_playback_bar)
   self.timeline_playback_bar.show()
  def load_preferences(self):
-  defaults={'shortcuts':{},'default_export_folder':r'D:\Commercial Exports','recording_subfolders':True,'theme':'dark','default_export_mode':'Accurate','autosave_enabled':True,'autosave_minutes':5,'recent_projects':[],'project_library_folder':str(Path.home()/'Documents'/'Commercial Splitter Projects'),'startup_restore':False,'pinned_projects':[],'export_preset':'Balanced','export_history':[],'export_queue':[],'failed_export_jobs':[],'detection_profiles':{},'active_detection_profile':'Balanced','compact_review':True,'timeline_organizer_visible':False,'timeline_tool_tab':0,'export_workspace_tab':0,'export_management_tab':0,'export_gallery_view':'Gallery','main_window_geometry':'','export_workspace_sizes':[720,500],'cut_inspector_visible':True,'confirm_inspector_cut_delete':False,'cut_inspector_widths':[790,290],'timeline_playback_position':'Top','timeline_clip_wave_overlay':True,'timeline_wave_mode':0}
+  defaults={'shortcuts':{},'default_export_folder':r'D:\Commercial Exports','recording_subfolders':True,'theme':'dark','default_export_mode':'Accurate','autosave_enabled':True,'autosave_minutes':5,'recent_projects':[],'project_library_folder':str(Path.home()/'Documents'/'Commercial Splitter Projects'),'startup_restore':False,'pinned_projects':[],'export_preset':'Balanced','export_history':[],'export_queue':[],'failed_export_jobs':[],'detection_profiles':{},'active_detection_profile':'Balanced','compact_review':True,'timeline_organizer_visible':False,'timeline_tool_tab':0,'export_workspace_tab':0,'export_management_tab':0,'export_gallery_view':'Gallery','main_window_geometry':'','export_workspace_sizes':[720,500],'cut_inspector_visible':True,'confirm_inspector_cut_delete':False,'cut_inspector_widths':[790,290],'timeline_playback_position':'Top','timeline_clip_wave_overlay':True,'timeline_wave_mode':0,'update_channel':'stable'}
   try:
    data=json.loads(PREFS_FILE.read_text(encoding='utf-8'))
    if isinstance(data,dict):defaults.update({k:v for k,v in data.items() if k in defaults})
   except (OSError,ValueError,TypeError):pass
   if defaults['theme'] not in ('dark','light','system'):defaults['theme']='dark'
+  if defaults['update_channel'] not in ('stable','prerelease'):defaults['update_channel']='stable'
   if defaults['default_export_mode'] not in ('Accurate','Fast copy'):defaults['default_export_mode']='Accurate'
   defaults['recording_subfolders']=bool(defaults['recording_subfolders'])
   defaults['autosave_enabled']=bool(defaults['autosave_enabled'])
